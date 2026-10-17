@@ -1,28 +1,34 @@
+# Multi-stage: Use static ffmpeg/ffprobe to avoid installing heavy Debian GUI/Mesa/LLVM libraries (~550MB saved)
+FROM mwader/static-ffmpeg:latest AS ffmpeg-source
+
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies (without proxy for fast direct debian package download)
+# Copy standalone static ffmpeg and ffprobe binaries
+COPY --from=ffmpeg-source /ffmpeg /ffprobe /usr/local/bin/
+
+# Only install minimal runtime library for CTranslate2 OpenMP support (~140KB)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    git \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 
-# Install PyTorch CPU and torchaudio CPU
+# Install CPU-only PyTorch and torchaudio (~180MB download, saving ~3.5GB of NVIDIA/CUDA bloat)
 RUN http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY \
     HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY \
     pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# Install whisperx
+# Install WhisperX without caching
 RUN http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY \
     HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY \
     pip install --no-cache-dir whisperx
 
 WORKDIR /app
 
+# WhisperX CLI entrypoint
 ENTRYPOINT ["whisperx"]
 CMD ["--help"]
