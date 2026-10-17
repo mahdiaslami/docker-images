@@ -1,34 +1,39 @@
-# Multi-stage: Use static ffmpeg/ffprobe to avoid installing heavy Debian GUI/Mesa/LLVM libraries (~550MB saved)
-FROM mwader/static-ffmpeg:latest AS ffmpeg-source
+# ============================================
+# Stage 1: Builder - Install all dependencies
+# ============================================
+FROM python:3.11-slim AS builder
 
-FROM python:3.11-slim
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-
-# Copy standalone static ffmpeg and ffprobe binaries
-COPY --from=ffmpeg-source /ffmpeg /ffprobe /usr/local/bin/
-
-# Only install minimal runtime library for CTranslate2 OpenMP support (~140KB)
+# Install system dependencies for build and audio processing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
+# Install uv for fast, reliable dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install CPU-only PyTorch and torchaudio (~180MB download, saving ~3.5GB of NVIDIA/CUDA bloat)
-RUN http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY \
-    HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY \
-    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Copy dependency files (using pyproject.toml or requirements.txt)
+# Example: COPY requirements.txt .
+# For this example, we'll install whisperx directly, but pinning is recommended.
+# It is highly recommended to use a requirements.txt or pyproject.toml for reproducibility.
+RUN uv pip install --no-cache --system whisperx \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple
 
-# Install WhisperX without caching
-RUN http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY \
-    HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY \
-    pip install --no-cache-dir whisperx
+# ============================================
+# Stage 2: Runtime - Create minimal final image
+# ============================================
+FROM python:3.11-slim
 
+# Install only the essential runtime library (libgomp1 for OpenMP)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the installed Python packages from the builder stage
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Set the working directory and entrypoint
 WORKDIR /app
-
-# WhisperX CLI entrypoint
 ENTRYPOINT ["whisperx"]
 CMD ["--help"]
